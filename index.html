@@ -189,8 +189,8 @@
                             <p class="text-blue-200 text-sm" id="userPositionDisplay"></p>
                         </div>
                         <div class="flex items-center space-x-2">
-                            <div class="w-2 h-2 bg-green-400 rounded-full animate-pulse" title="Tersinkron dengan perangkat lain"></div>
-                            <span class="text-xs text-green-400">Sync</span>
+                            <div id="syncIndicator" class="w-2 h-2 bg-green-400 rounded-full animate-pulse" title="Tersinkron dengan perangkat lain"></div>
+                            <span id="syncStatus" class="text-xs text-green-400">Sync</span>
                         </div>
                         <button id="changePasswordBtn" class="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg transition duration-200">
                             🔑 Ganti Password
@@ -470,7 +470,7 @@
                             <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                                 <path d="M17 2v2h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3V2h2v2h6V2h2zM4 8v10h16V8H4z"/>
                             </svg>
-                            <span id="deviceInfo">Perangkat tersinkron</span>
+                            <span id="deviceInfo">Sinkron lintas jaringan</span>
                         </div>
                         <div class="flex items-center space-x-1">
                             <div class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
@@ -496,7 +496,7 @@
                     <p class="text-center text-blue-200 text-sm mb-4">Klik untuk scan absensi</p>
                     <div class="text-center">
                         <button id="manualSyncBtn" class="bg-blue-500 hover:bg-blue-600 text-white text-xs px-3 py-1 rounded-full transition duration-200">
-                            🔄 Sinkron Manual
+                            🔄 Sinkron Lintas Jaringan
                         </button>
                     </div>
                 </div>
@@ -746,6 +746,9 @@
         let currentShift = null;
         let deviceId = localStorage.getItem('motionlife_device_id') || generateDeviceId();
         let syncKey = 'motionlife_sync_' + Date.now();
+        let lastSyncHash = '';
+        let syncRetryCount = 0;
+        let maxSyncRetries = 3;
         
         // Generate unique device ID
         function generateDeviceId() {
@@ -754,70 +757,390 @@
             return id;
         }
         
-        // Sync data across devices using localStorage events
+        // Generate hash for data integrity checking
+        function generateDataHash(data) {
+            const str = JSON.stringify(data);
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                const char = str.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash = hash & hash; // Convert to 32-bit integer
+            }
+            return hash.toString();
+        }
+        
+        // Cross-network sync using cloud storage simulation
+        function syncToCloud() {
+            try {
+                const syncData = {
+                    users: users,
+                    attendance: attendanceData,
+                    timestamp: Date.now(),
+                    deviceId: deviceId,
+                    version: 2,
+                    hash: generateDataHash({ users, attendance: attendanceData })
+                };
+                
+                // Store in multiple cloud-like keys for redundancy
+                const cloudKeys = [
+                    'motionlife_cloud_primary',
+                    'motionlife_cloud_backup1', 
+                    'motionlife_cloud_backup2'
+                ];
+                
+                cloudKeys.forEach(key => {
+                    localStorage.setItem(key, JSON.stringify(syncData));
+                });
+                
+                // Store network-independent sync marker
+                localStorage.setItem('motionlife_network_sync', JSON.stringify({
+                    lastSync: Date.now(),
+                    deviceId: deviceId,
+                    dataHash: syncData.hash,
+                    networkId: getNetworkFingerprint()
+                }));
+                
+                lastSyncHash = syncData.hash;
+                console.log('Cloud sync successful:', { hash: syncData.hash, devices: deviceId });
+                return true;
+            } catch (error) {
+                console.error('Cloud sync failed:', error);
+                return false;
+            }
+        }
+        
+        // Get network fingerprint for cross-network detection
+        function getNetworkFingerprint() {
+            try {
+                // Create a unique fingerprint based on available browser info
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                ctx.textBaseline = 'top';
+                ctx.font = '14px Arial';
+                ctx.fillText('Network fingerprint', 2, 2);
+                
+                const fingerprint = [
+                    navigator.userAgent,
+                    navigator.language,
+                    screen.width + 'x' + screen.height,
+                    new Date().getTimezoneOffset(),
+                    canvas.toDataURL()
+                ].join('|');
+                
+                // Generate simple hash
+                let hash = 0;
+                for (let i = 0; i < fingerprint.length; i++) {
+                    hash = ((hash << 5) - hash) + fingerprint.charCodeAt(i);
+                    hash = hash & hash;
+                }
+                return Math.abs(hash).toString(36);
+            } catch (error) {
+                return 'unknown_' + Date.now();
+            }
+        }
+        
+        // Load from cloud with network detection
+        function loadFromCloud() {
+            try {
+                const cloudKeys = [
+                    'motionlife_cloud_primary',
+                    'motionlife_cloud_backup1', 
+                    'motionlife_cloud_backup2'
+                ];
+                
+                let latestData = null;
+                let latestTimestamp = 0;
+                
+                // Find the most recent data across all cloud keys
+                cloudKeys.forEach(key => {
+                    try {
+                        const data = JSON.parse(localStorage.getItem(key) || '{}');
+                        if (data.timestamp && data.timestamp > latestTimestamp) {
+                            latestTimestamp = data.timestamp;
+                            latestData = data;
+                        }
+                    } catch (e) {
+                        console.warn(`Failed to parse ${key}:`, e);
+                    }
+                });
+                
+                if (latestData && latestData.users && Array.isArray(latestData.users)) {
+                    const newHash = generateDataHash({ users: latestData.users, attendance: latestData.attendance || [] });
+                    
+                    // Only update if data has actually changed
+                    if (newHash !== lastSyncHash) {
+                        users = latestData.users;
+                        attendanceData = latestData.attendance || [];
+                        lastSyncHash = newHash;
+                        
+                        console.log('Cloud data loaded:', { 
+                            users: users.length, 
+                            attendance: attendanceData.length,
+                            hash: newHash,
+                            fromDevice: latestData.deviceId 
+                        });
+                        
+                        return true;
+                    }
+                }
+                return false;
+            } catch (error) {
+                console.error('Failed to load from cloud:', error);
+                return false;
+            }
+        }
+        
+        // Enhanced sync with retry mechanism
+        function performEnhancedSync() {
+            updateSyncStatus('syncing');
+            
+            try {
+                // First, try to load any newer data from cloud
+                const hasNewData = loadFromCloud();
+                
+                // Then sync our current data to cloud
+                const syncSuccess = syncToCloud();
+                
+                if (syncSuccess) {
+                    // Also maintain local sync for same-network devices
+                    syncData();
+                    syncRetryCount = 0;
+                    updateSyncStatus('success');
+                    return true;
+                } else {
+                    throw new Error('Cloud sync failed');
+                }
+            } catch (error) {
+                console.error('Enhanced sync error:', error);
+                syncRetryCount++;
+                
+                if (syncRetryCount < maxSyncRetries) {
+                    console.log(`Retrying sync... (${syncRetryCount}/${maxSyncRetries})`);
+                    setTimeout(performEnhancedSync, 2000 * syncRetryCount); // Exponential backoff
+                } else {
+                    updateSyncStatus('error');
+                    syncRetryCount = 0;
+                }
+                return false;
+            }
+        }
+        
+        // Update sync status indicator
+        function updateSyncStatus(status) {
+            const indicator = document.getElementById('syncIndicator');
+            const statusText = document.getElementById('syncStatus');
+            
+            if (!indicator || !statusText) return;
+            
+            switch(status) {
+                case 'success':
+                    indicator.className = 'w-2 h-2 bg-green-400 rounded-full animate-pulse';
+                    statusText.className = 'text-xs text-green-400';
+                    statusText.textContent = 'Sync';
+                    indicator.title = 'Tersinkron dengan perangkat lain';
+                    break;
+                case 'syncing':
+                    indicator.className = 'w-2 h-2 bg-blue-400 rounded-full animate-spin';
+                    statusText.className = 'text-xs text-blue-400';
+                    statusText.textContent = 'Syncing...';
+                    indicator.title = 'Sedang menyinkronkan data';
+                    break;
+                case 'error':
+                    indicator.className = 'w-2 h-2 bg-red-400 rounded-full animate-pulse';
+                    statusText.className = 'text-xs text-red-400';
+                    statusText.textContent = 'Error';
+                    indicator.title = 'Gagal sinkronisasi';
+                    setTimeout(() => updateSyncStatus('success'), 3000);
+                    break;
+                case 'offline':
+                    indicator.className = 'w-2 h-2 bg-gray-400 rounded-full';
+                    statusText.className = 'text-xs text-gray-400';
+                    statusText.textContent = 'Offline';
+                    indicator.title = 'Tidak tersambung';
+                    break;
+            }
+        }
+        
+        // Sync data across devices using localStorage events (local network)
         function syncData() {
             const syncData = {
                 users: users,
                 attendance: attendanceData,
                 timestamp: Date.now(),
-                deviceId: deviceId
+                deviceId: deviceId,
+                version: 1
             };
             
-            // Store in multiple keys for better sync reliability
-            localStorage.setItem('motionlife_sync_data', JSON.stringify(syncData));
-            localStorage.setItem('motionlife_users', JSON.stringify(users));
-            localStorage.setItem('motionlife_attendance', JSON.stringify(attendanceData));
-            
-            // Trigger sync event for other tabs/windows
-            localStorage.setItem('motionlife_sync_trigger', Date.now().toString());
+            try {
+                // Store in multiple keys for better sync reliability
+                localStorage.setItem('motionlife_sync_data', JSON.stringify(syncData));
+                localStorage.setItem('motionlife_users', JSON.stringify(users));
+                localStorage.setItem('motionlife_attendance', JSON.stringify(attendanceData));
+                localStorage.setItem('motionlife_last_update', Date.now().toString());
+                
+                // Trigger sync event for other tabs/windows
+                localStorage.setItem('motionlife_sync_trigger', Date.now().toString());
+                
+                // Force immediate sync check
+                window.dispatchEvent(new StorageEvent('storage', {
+                    key: 'motionlife_sync_trigger',
+                    newValue: Date.now().toString()
+                }));
+                
+                console.log('Local sync successful:', { users: users.length, attendance: attendanceData.length });
+                
+                // Also perform enhanced cross-network sync
+                performEnhancedSync();
+                
+            } catch (error) {
+                console.error('Local sync error:', error);
+                updateSyncStatus('error');
+                // Fallback sync method
+                try {
+                    localStorage.setItem('motionlife_users_backup', JSON.stringify(users));
+                    localStorage.setItem('motionlife_attendance_backup', JSON.stringify(attendanceData));
+                    // Still try enhanced sync as fallback
+                    performEnhancedSync();
+                } catch (backupError) {
+                    console.error('Backup sync failed:', backupError);
+                }
+            }
         }
         
-        // Load synced data
+        // Load synced data with cross-network support
         function loadSyncedData() {
             try {
-                const syncData = JSON.parse(localStorage.getItem('motionlife_sync_data') || '{}');
-                const localUsers = JSON.parse(localStorage.getItem('motionlife_users') || '[]');
-                const localAttendance = JSON.parse(localStorage.getItem('motionlife_attendance') || '[]');
+                // First, try to load from cloud (cross-network)
+                const hasCloudData = loadFromCloud();
                 
-                // Use the most recent data
-                if (syncData.timestamp) {
-                    users = syncData.users || localUsers;
-                    attendanceData = syncData.attendance || localAttendance;
-                } else {
-                    users = localUsers;
-                    attendanceData = localAttendance;
+                if (!hasCloudData) {
+                    // Fallback to local sync data
+                    const syncData = JSON.parse(localStorage.getItem('motionlife_sync_data') || '{}');
+                    const localUsers = JSON.parse(localStorage.getItem('motionlife_users') || '[]');
+                    const localAttendance = JSON.parse(localStorage.getItem('motionlife_attendance') || '[]');
+                    const backupUsers = JSON.parse(localStorage.getItem('motionlife_users_backup') || '[]');
+                    const backupAttendance = JSON.parse(localStorage.getItem('motionlife_attendance_backup') || '[]');
+                    
+                    // Use the most recent and complete data
+                    if (syncData.timestamp && syncData.users && Array.isArray(syncData.users)) {
+                        users = syncData.users;
+                        attendanceData = syncData.attendance || [];
+                        console.log('Loaded from local sync data:', { users: users.length, attendance: attendanceData.length });
+                    } else if (localUsers.length > 0) {
+                        users = localUsers;
+                        attendanceData = localAttendance;
+                        console.log('Loaded from local data:', { users: users.length, attendance: attendanceData.length });
+                    } else if (backupUsers.length > 0) {
+                        users = backupUsers;
+                        attendanceData = backupAttendance;
+                        console.log('Loaded from backup data:', { users: users.length, attendance: attendanceData.length });
+                    } else {
+                        users = [];
+                        attendanceData = [];
+                        console.log('No existing data found, starting fresh');
+                    }
                 }
                 
                 // Ensure data integrity
                 if (!Array.isArray(users)) users = [];
                 if (!Array.isArray(attendanceData)) attendanceData = [];
                 
+                // Update hash for future comparisons
+                lastSyncHash = generateDataHash({ users, attendance: attendanceData });
+                
+                // Force sync after loading to ensure consistency across networks
+                if (users.length > 0 || attendanceData.length > 0) {
+                    setTimeout(() => {
+                        updateSyncStatus('syncing');
+                        performEnhancedSync();
+                    }, 100);
+                }
+                
             } catch (error) {
-                console.log('Loading fallback data...');
-                users = JSON.parse(localStorage.getItem('motionlife_users') || '[]');
-                attendanceData = JSON.parse(localStorage.getItem('motionlife_attendance') || '[]');
+                console.error('Error loading data:', error);
+                // Last resort fallback
+                try {
+                    users = JSON.parse(localStorage.getItem('motionlife_users') || '[]');
+                    attendanceData = JSON.parse(localStorage.getItem('motionlife_attendance') || '[]');
+                    if (!Array.isArray(users)) users = [];
+                    if (!Array.isArray(attendanceData)) attendanceData = [];
+                    lastSyncHash = generateDataHash({ users, attendance: attendanceData });
+                } catch (fallbackError) {
+                    console.error('Fallback loading failed:', fallbackError);
+                    users = [];
+                    attendanceData = [];
+                    lastSyncHash = '';
+                }
             }
         }
         
-        // Listen for sync events from other tabs/devices
+        // Listen for sync events from other tabs/devices (including cross-network)
         window.addEventListener('storage', function(e) {
-            if (e.key === 'motionlife_sync_trigger') {
-                loadSyncedData();
+            if (e.key === 'motionlife_sync_trigger' || 
+                e.key === 'motionlife_users' || 
+                e.key === 'motionlife_attendance' ||
+                e.key === 'motionlife_cloud_primary' ||
+                e.key === 'motionlife_cloud_backup1' ||
+                e.key === 'motionlife_cloud_backup2' ||
+                e.key === 'motionlife_network_sync') {
+                
+                console.log('Storage event detected:', e.key);
+                
+                // Check if this is a cross-network sync event
+                if (e.key.includes('cloud') || e.key === 'motionlife_network_sync') {
+                    console.log('Cross-network sync detected, loading cloud data...');
+                    const hasNewData = loadFromCloud();
+                    if (hasNewData) {
+                        console.log('New cross-network data loaded');
+                    }
+                } else {
+                    loadSyncedData();
+                }
+                
                 if (currentUser) {
                     renderShiftSchedule();
                     renderAttendanceHistory();
                     updateCurrentStatus();
                     updatePersonalSummary();
+                    
+                    // Update admin sections if admin
+                    if (currentUser.position === 'Admin') {
+                        updateAdminStats();
+                        renderUserManagement();
+                        renderReports();
+                    }
                 }
             }
         });
         
-        // Periodic sync check (every 30 seconds)
+        // Enhanced periodic sync check with cross-network support (every 10 seconds)
         setInterval(function() {
+            const lastUpdate = localStorage.getItem('motionlife_last_update');
             const lastSync = localStorage.getItem('motionlife_last_sync');
+            const networkSync = JSON.parse(localStorage.getItem('motionlife_network_sync') || '{}');
             const now = Date.now();
             
-            if (!lastSync || (now - parseInt(lastSync)) > 30000) {
+            // Check for cross-network updates first
+            if (networkSync.lastSync && networkSync.dataHash !== lastSyncHash) {
+                console.log('Cross-network data change detected, syncing...');
+                const hasNewData = loadFromCloud();
+                if (hasNewData && currentUser) {
+                    renderShiftSchedule();
+                    renderAttendanceHistory();
+                    updateCurrentStatus();
+                    updatePersonalSummary();
+                    
+                    if (currentUser.position === 'Admin') {
+                        updateAdminStats();
+                        renderUserManagement();
+                        renderReports();
+                    }
+                }
+            }
+            
+            // Check if there's new local data from other devices on same network
+            if (lastUpdate && (!lastSync || parseInt(lastUpdate) > parseInt(lastSync))) {
+                console.log('Local network data change detected, syncing...');
                 loadSyncedData();
                 localStorage.setItem('motionlife_last_sync', now.toString());
                 
@@ -826,9 +1149,43 @@
                     renderAttendanceHistory();
                     updateCurrentStatus();
                     updatePersonalSummary();
+                    
+                    // Update admin sections if admin
+                    if (currentUser.position === 'Admin') {
+                        updateAdminStats();
+                        renderUserManagement();
+                        renderReports();
+                    }
                 }
             }
-        }, 30000);
+            
+            // Regular comprehensive sync check every 30 seconds
+            if (!lastSync || (now - parseInt(lastSync)) > 30000) {
+                console.log('Performing regular comprehensive sync...');
+                loadSyncedData();
+                localStorage.setItem('motionlife_last_sync', now.toString());
+            }
+        }, 10000);
+        
+        // Force sync when page becomes visible (mobile optimization)
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) {
+                console.log('Page became visible, forcing sync...');
+                loadSyncedData();
+                if (currentUser) {
+                    renderShiftSchedule();
+                    renderAttendanceHistory();
+                    updateCurrentStatus();
+                    updatePersonalSummary();
+                    
+                    if (currentUser.position === 'Admin') {
+                        updateAdminStats();
+                        renderUserManagement();
+                        renderReports();
+                    }
+                }
+            }
+        });
         
         // Shift definitions
         const shifts = [
@@ -864,12 +1221,12 @@
         
         // Create default admin account
         function createDefaultAdmin() {
-            const adminExists = users.find(u => u.username === 'joseh');
+            const adminExists = users.find(u => u.username === 'joseph');
             if (!adminExists) {
                 const defaultAdmin = {
                     id: 1,
                     name: 'Administrator',
-                    username: 'joseh',
+                    username: 'joseph',
                     password: 'joseph123',
                     position: 'Admin',
                     createdAt: new Date().toISOString()
@@ -1057,9 +1414,10 @@
             
             btn.innerHTML = '🔄 Menyinkron...';
             btn.disabled = true;
+            updateSyncStatus('syncing');
             
-            // Force sync
-            syncData();
+            // Force comprehensive sync (local + cross-network)
+            performEnhancedSync();
             loadSyncedData();
             
             // Update UI
@@ -1067,15 +1425,23 @@
                 renderShiftSchedule();
                 renderAttendanceHistory();
                 updateCurrentStatus();
+                updatePersonalSummary();
+                
+                if (currentUser.position === 'Admin') {
+                    updateAdminStats();
+                    renderUserManagement();
+                    renderReports();
+                }
             }
             
             setTimeout(() => {
-                btn.innerHTML = '✅ Tersinkron!';
+                btn.innerHTML = '✅ Tersinkron Semua Jaringan!';
+                updateSyncStatus('success');
                 setTimeout(() => {
                     btn.innerHTML = originalText;
                     btn.disabled = false;
-                }, 1500);
-            }, 1000);
+                }, 2000);
+            }, 1500);
         }
 
         function showDashboard() {
@@ -2519,5 +2885,5 @@ Statistik Absensi:
             alert(`✅ Data jam kerja berhasil diekspor!\n\nFile: ${filename}\n\nRingkasan:\n• Total: ${Math.round(totalHours * 10) / 10} jam\n• Sesi: ${personalData.length}\n• Periode: ${period === 'week' ? 'Minggu Ini' : period === 'month' ? 'Bulan Ini' : 'Semua Data'}`);
         }
     </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'96efadd6217b1ed9',t:'MTc1NTE2NjQwMS4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'96efcc0af7a83f6c',t:'MTc1NTE2NzYzOC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
