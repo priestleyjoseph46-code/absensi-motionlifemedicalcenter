@@ -105,6 +105,13 @@
                     <button id="showRegister" class="text-blue-400 hover:text-blue-300 font-semibold">
                         Daftar di sini
                     </button>
+                    <div class="mt-4 p-3 bg-blue-500/20 rounded-lg border border-blue-500/30">
+                        <p class="text-blue-200 text-sm mb-2">🔑 Login Default Admin:</p>
+                        <button id="quickAdminLogin" class="bg-blue-600 hover:bg-blue-700 text-white text-sm px-4 py-2 rounded transition duration-200">
+                            Login sebagai Admin
+                        </button>
+                        <p class="text-blue-300 text-xs mt-1">Username: joseh | Password: joseph123</p>
+                    </div>
                 </div>
             </div>
             
@@ -1198,42 +1205,57 @@
 
         // Initialize app
         document.addEventListener('DOMContentLoaded', function() {
+            console.log('App initializing...');
+            
             // Load synced data first
             loadSyncedData();
+            console.log('Data loaded, users count:', users.length);
             
             // Create default admin account if not exists
             createDefaultAdmin();
+            console.log('Admin check complete, final users count:', users.length);
             
             // Setup event listeners
             setupEventListeners();
+            console.log('Event listeners setup complete');
             
             // Check if user is logged in
             const savedUser = localStorage.getItem('motionlife_current_user');
             if (savedUser) {
                 currentUser = JSON.parse(savedUser);
+                console.log('Restored user session:', currentUser);
                 showDashboard();
+            } else {
+                console.log('No saved user session found');
             }
             
             // Update time every second
             updateTime();
             setInterval(updateTime, 1000);
+            
+            console.log('App initialization complete');
         });
         
         // Create default admin account
         function createDefaultAdmin() {
-            const adminExists = users.find(u => u.username === 'joseph');
+            console.log('Creating default admin, current users:', users.length);
+            const adminExists = users.find(u => u.username === 'joseh');
             if (!adminExists) {
                 const defaultAdmin = {
                     id: 1,
                     name: 'Administrator',
-                    username: 'joseph',
+                    username: 'joseh',
                     password: 'joseph123',
                     position: 'Admin',
                     createdAt: new Date().toISOString()
                 };
                 users.push(defaultAdmin);
+                console.log('Default admin created:', defaultAdmin);
                 syncData();
+            } else {
+                console.log('Admin already exists:', adminExists);
             }
+            console.log('Total users after admin check:', users.length);
         }
 
         // Setup all event listeners
@@ -1252,6 +1274,7 @@
             document.getElementById('cancelPositionEdit').addEventListener('click', hideEditPositionModal);
             document.getElementById('adminResetPasswordForm').addEventListener('submit', handleAdminPasswordReset);
             document.getElementById('cancelAdminPasswordReset').addEventListener('click', hideAdminResetPasswordModal);
+            document.getElementById('quickAdminLogin').addEventListener('click', handleQuickAdminLogin);
             
             
             // Manual sync button
@@ -1306,16 +1329,21 @@
 
         function handleLogin(e) {
             e.preventDefault();
-            const username = document.getElementById('loginUsername').value;
-            const password = document.getElementById('loginPassword').value;
+            const username = document.getElementById('loginUsername').value.trim();
+            const password = document.getElementById('loginPassword').value.trim();
+
+            console.log('Login attempt:', { username, password, totalUsers: users.length });
+            console.log('Available users:', users.map(u => ({ username: u.username, password: u.password })));
 
             const user = users.find(u => u.username === username && u.password === password);
             if (user) {
                 currentUser = user;
                 localStorage.setItem('motionlife_current_user', JSON.stringify(user));
+                console.log('Login successful:', user);
                 showDashboard();
             } else {
-                alert('Username atau password salah!');
+                console.log('Login failed - user not found or wrong credentials');
+                alert(`Username atau password salah!\n\nCoba gunakan:\nUsername: joseh\nPassword: joseph123\n\nTotal users tersedia: ${users.length}`);
             }
         }
 
@@ -1356,6 +1384,37 @@
             currentUser = null;
             document.getElementById('dashboard').classList.add('hidden');
             document.getElementById('authScreen').classList.remove('hidden');
+        }
+        
+        function handleQuickAdminLogin() {
+            console.log('Quick admin login clicked');
+            console.log('Current users:', users);
+            
+            // Force create admin if not exists
+            let adminUser = users.find(u => u.username === 'joseh');
+            if (!adminUser) {
+                adminUser = {
+                    id: 1,
+                    name: 'Administrator',
+                    username: 'joseh',
+                    password: 'joseph123',
+                    position: 'Admin',
+                    createdAt: new Date().toISOString()
+                };
+                users.push(adminUser);
+                syncData();
+                console.log('Admin user created:', adminUser);
+            }
+            
+            // Auto-fill login form
+            document.getElementById('loginUsername').value = 'joseh';
+            document.getElementById('loginPassword').value = 'joseph123';
+            
+            // Perform login
+            currentUser = adminUser;
+            localStorage.setItem('motionlife_current_user', JSON.stringify(adminUser));
+            console.log('Quick login successful:', adminUser);
+            showDashboard();
         }
         
         function showChangePasswordModal() {
@@ -2885,5 +2944,5 @@ Statistik Absensi:
             alert(`✅ Data jam kerja berhasil diekspor!\n\nFile: ${filename}\n\nRingkasan:\n• Total: ${Math.round(totalHours * 10) / 10} jam\n• Sesi: ${personalData.length}\n• Periode: ${period === 'week' ? 'Minggu Ini' : period === 'month' ? 'Bulan Ini' : 'Semua Data'}`);
         }
     </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'96efcc0af7a83f6c',t:'MTc1NTE2NzYzOC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'96efd5f5731f87ef',t:'MTc1NTE2ODA0NC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
