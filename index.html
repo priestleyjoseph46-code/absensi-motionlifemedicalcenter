@@ -1014,71 +1014,83 @@
             }
         }
         
-        // Load synced data with cross-network support
+        // Simplified data loading
         function loadSyncedData() {
+            console.log('📂 Loading synced data...');
+            
             try {
-                // First, try to load from cloud (cross-network)
-                const hasCloudData = loadFromCloud();
+                // Try multiple storage keys in order of preference
+                const storageKeys = [
+                    'motionlife_cloud_primary',
+                    'motionlife_users',
+                    'motionlife_sync_data',
+                    'motionlife_users_backup'
+                ];
                 
-                if (!hasCloudData) {
-                    // Fallback to local sync data
-                    const syncData = JSON.parse(localStorage.getItem('motionlife_sync_data') || '{}');
-                    const localUsers = JSON.parse(localStorage.getItem('motionlife_users') || '[]');
-                    const localAttendance = JSON.parse(localStorage.getItem('motionlife_attendance') || '[]');
-                    const backupUsers = JSON.parse(localStorage.getItem('motionlife_users_backup') || '[]');
-                    const backupAttendance = JSON.parse(localStorage.getItem('motionlife_attendance_backup') || '[]');
-                    
-                    // Use the most recent and complete data
-                    if (syncData.timestamp && syncData.users && Array.isArray(syncData.users)) {
-                        users = syncData.users;
-                        attendanceData = syncData.attendance || [];
-                        console.log('Loaded from local sync data:', { users: users.length, attendance: attendanceData.length });
-                    } else if (localUsers.length > 0) {
-                        users = localUsers;
-                        attendanceData = localAttendance;
-                        console.log('Loaded from local data:', { users: users.length, attendance: attendanceData.length });
-                    } else if (backupUsers.length > 0) {
-                        users = backupUsers;
-                        attendanceData = backupAttendance;
-                        console.log('Loaded from backup data:', { users: users.length, attendance: attendanceData.length });
-                    } else {
-                        users = [];
-                        attendanceData = [];
-                        console.log('No existing data found, starting fresh');
+                let loadedUsers = [];
+                let loadedAttendance = [];
+                let dataSource = 'none';
+                
+                for (const key of storageKeys) {
+                    try {
+                        const data = localStorage.getItem(key);
+                        if (data) {
+                            const parsed = JSON.parse(data);
+                            
+                            if (key === 'motionlife_cloud_primary' && parsed.users && Array.isArray(parsed.users)) {
+                                loadedUsers = parsed.users;
+                                loadedAttendance = parsed.attendance || [];
+                                dataSource = 'cloud';
+                                break;
+                            } else if (key === 'motionlife_users' && Array.isArray(parsed)) {
+                                loadedUsers = parsed;
+                                const attendanceData = localStorage.getItem('motionlife_attendance');
+                                loadedAttendance = attendanceData ? JSON.parse(attendanceData) : [];
+                                dataSource = 'local';
+                                break;
+                            } else if (key === 'motionlife_sync_data' && parsed.users && Array.isArray(parsed.users)) {
+                                loadedUsers = parsed.users;
+                                loadedAttendance = parsed.attendance || [];
+                                dataSource = 'sync';
+                                break;
+                            } else if (key === 'motionlife_users_backup' && Array.isArray(parsed)) {
+                                loadedUsers = parsed;
+                                const backupAttendance = localStorage.getItem('motionlife_attendance_backup');
+                                loadedAttendance = backupAttendance ? JSON.parse(backupAttendance) : [];
+                                dataSource = 'backup';
+                                break;
+                            }
+                        }
+                    } catch (e) {
+                        console.warn(`⚠️ Failed to load from ${key}:`, e);
+                        continue;
                     }
                 }
                 
-                // Ensure data integrity
-                if (!Array.isArray(users)) users = [];
-                if (!Array.isArray(attendanceData)) attendanceData = [];
+                // Apply loaded data
+                users = Array.isArray(loadedUsers) ? loadedUsers : [];
+                attendanceData = Array.isArray(loadedAttendance) ? loadedAttendance : [];
+                
+                console.log(`✅ Data loaded from ${dataSource}:`, { 
+                    users: users.length, 
+                    attendance: attendanceData.length 
+                });
                 
                 // Update hash for future comparisons
                 lastSyncHash = generateDataHash({ users, attendance: attendanceData });
                 
-                // Force sync after loading to ensure consistency across networks
-                if (users.length > 0 || attendanceData.length > 0) {
-                    setTimeout(() => {
-                        updateSyncStatus('syncing');
-                        performEnhancedSync();
-                    }, 100);
-                }
-                
             } catch (error) {
-                console.error('Error loading data:', error);
-                // Last resort fallback
-                try {
-                    users = JSON.parse(localStorage.getItem('motionlife_users') || '[]');
-                    attendanceData = JSON.parse(localStorage.getItem('motionlife_attendance') || '[]');
-                    if (!Array.isArray(users)) users = [];
-                    if (!Array.isArray(attendanceData)) attendanceData = [];
-                    lastSyncHash = generateDataHash({ users, attendance: attendanceData });
-                } catch (fallbackError) {
-                    console.error('Fallback loading failed:', fallbackError);
-                    users = [];
-                    attendanceData = [];
-                    lastSyncHash = '';
-                }
+                console.error('❌ Critical error loading data:', error);
+                users = [];
+                attendanceData = [];
+                lastSyncHash = '';
             }
+            
+            console.log('📊 Final data state:', { 
+                users: users.length, 
+                attendance: attendanceData.length,
+                usernames: users.map(u => u.username)
+            });
         }
         
         // Listen for sync events from other tabs/devices (including cross-network)
@@ -1205,41 +1217,63 @@
 
         // Initialize app
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('App initializing...');
+            console.log('🚀 App initializing...');
             
-            // Load synced data first
-            loadSyncedData();
-            console.log('Data loaded, users count:', users.length);
-            
-            // Create default admin account if not exists
-            createDefaultAdmin();
-            console.log('Admin check complete, final users count:', users.length);
-            
-            // Setup event listeners
-            setupEventListeners();
-            console.log('Event listeners setup complete');
-            
-            // Check if user is logged in
-            const savedUser = localStorage.getItem('motionlife_current_user');
-            if (savedUser) {
-                currentUser = JSON.parse(savedUser);
-                console.log('Restored user session:', currentUser);
-                showDashboard();
-            } else {
-                console.log('No saved user session found');
+            try {
+                // Load synced data first
+                loadSyncedData();
+                console.log('✅ Data loaded, users count:', users.length);
+                
+                // Force create default admin account
+                createDefaultAdmin();
+                console.log('✅ Admin check complete, final users count:', users.length);
+                
+                // Setup event listeners
+                setupEventListeners();
+                console.log('✅ Event listeners setup complete');
+                
+                // Check if user is logged in
+                const savedUser = localStorage.getItem('motionlife_current_user');
+                if (savedUser) {
+                    try {
+                        currentUser = JSON.parse(savedUser);
+                        console.log('✅ Restored user session:', currentUser);
+                        showDashboard();
+                    } catch (e) {
+                        console.error('❌ Failed to parse saved user:', e);
+                        localStorage.removeItem('motionlife_current_user');
+                    }
+                } else {
+                    console.log('ℹ️ No saved user session found');
+                }
+                
+                // Update time every second
+                updateTime();
+                setInterval(updateTime, 1000);
+                
+                console.log('🎉 App initialization complete');
+                
+                // Show debug info
+                setTimeout(() => {
+                    console.log('📊 Debug Info:');
+                    console.log('- Total users:', users.length);
+                    console.log('- Users list:', users.map(u => ({ name: u.name, username: u.username })));
+                    console.log('- Admin exists:', users.some(u => u.username === 'joseh'));
+                }, 1000);
+                
+            } catch (error) {
+                console.error('💥 App initialization failed:', error);
+                alert('Terjadi kesalahan saat memuat aplikasi. Silakan refresh halaman.');
             }
-            
-            // Update time every second
-            updateTime();
-            setInterval(updateTime, 1000);
-            
-            console.log('App initialization complete');
         });
         
         // Create default admin account
         function createDefaultAdmin() {
-            console.log('Creating default admin, current users:', users.length);
-            const adminExists = users.find(u => u.username === 'joseh');
+            console.log('🔧 Creating default admin, current users:', users.length);
+            
+            // Always ensure admin exists
+            let adminExists = users.find(u => u.username === 'joseh');
+            
             if (!adminExists) {
                 const defaultAdmin = {
                     id: 1,
@@ -1250,12 +1284,43 @@
                     createdAt: new Date().toISOString()
                 };
                 users.push(defaultAdmin);
-                console.log('Default admin created:', defaultAdmin);
-                syncData();
+                console.log('✅ Default admin created:', defaultAdmin);
+                
+                // Force save to localStorage immediately
+                try {
+                    localStorage.setItem('motionlife_users', JSON.stringify(users));
+                    localStorage.setItem('motionlife_cloud_primary', JSON.stringify({
+                        users: users,
+                        attendance: attendanceData,
+                        timestamp: Date.now(),
+                        deviceId: deviceId,
+                        version: 2
+                    }));
+                    console.log('✅ Admin data saved to storage');
+                } catch (e) {
+                    console.error('❌ Failed to save admin data:', e);
+                }
             } else {
-                console.log('Admin already exists:', adminExists);
+                console.log('✅ Admin already exists:', adminExists);
             }
-            console.log('Total users after admin check:', users.length);
+            
+            console.log('📊 Total users after admin check:', users.length);
+            
+            // Double check admin exists
+            const finalCheck = users.find(u => u.username === 'joseh');
+            if (!finalCheck) {
+                console.error('❌ CRITICAL: Admin still not found after creation!');
+                // Force create again
+                users.push({
+                    id: Date.now(),
+                    name: 'Administrator',
+                    username: 'joseh',
+                    password: 'joseph123',
+                    position: 'Admin',
+                    createdAt: new Date().toISOString()
+                });
+                console.log('🚨 Emergency admin created');
+            }
         }
 
         // Setup all event listeners
@@ -1332,18 +1397,43 @@
             const username = document.getElementById('loginUsername').value.trim();
             const password = document.getElementById('loginPassword').value.trim();
 
-            console.log('Login attempt:', { username, password, totalUsers: users.length });
-            console.log('Available users:', users.map(u => ({ username: u.username, password: u.password })));
+            console.log('🔐 Login attempt:', { username, password, totalUsers: users.length });
+            console.log('📋 Available users:', users.map(u => ({ username: u.username, password: u.password })));
+
+            // Force reload data before login attempt
+            loadSyncedData();
+            createDefaultAdmin();
+            
+            console.log('🔄 After reload - users count:', users.length);
+            console.log('🔄 After reload - users:', users.map(u => ({ username: u.username })));
 
             const user = users.find(u => u.username === username && u.password === password);
             if (user) {
                 currentUser = user;
                 localStorage.setItem('motionlife_current_user', JSON.stringify(user));
-                console.log('Login successful:', user);
+                console.log('✅ Login successful:', user);
                 showDashboard();
             } else {
-                console.log('Login failed - user not found or wrong credentials');
-                alert(`Username atau password salah!\n\nCoba gunakan:\nUsername: joseh\nPassword: joseph123\n\nTotal users tersedia: ${users.length}`);
+                console.log('❌ Login failed - user not found or wrong credentials');
+                
+                // Show detailed debug info
+                const debugInfo = `
+🔍 DEBUG INFO:
+• Username entered: "${username}"
+• Password entered: "${password}"
+• Total users in system: ${users.length}
+• Available usernames: ${users.map(u => u.username).join(', ')}
+
+✅ SOLUSI CEPAT:
+1. Klik tombol "Login sebagai Admin" (biru)
+2. Atau gunakan:
+   Username: joseh
+   Password: joseph123
+
+🔧 Jika masih error, buka Console (F12) untuk detail.
+                `;
+                
+                alert(debugInfo);
             }
         }
 
@@ -2944,5 +3034,5 @@ Statistik Absensi:
             alert(`✅ Data jam kerja berhasil diekspor!\n\nFile: ${filename}\n\nRingkasan:\n• Total: ${Math.round(totalHours * 10) / 10} jam\n• Sesi: ${personalData.length}\n• Periode: ${period === 'week' ? 'Minggu Ini' : period === 'month' ? 'Bulan Ini' : 'Semua Data'}`);
         }
     </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'96efd5f5731f87ef',t:'MTc1NTE2ODA0NC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'96efe2e76616f93f',t:'MTc1NTE2ODU3NC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
